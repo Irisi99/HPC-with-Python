@@ -5,12 +5,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpi4py import MPI
 
-s = 4
-x_n = y_n = 60
+s = 3
+x_n = y_n = 50
 time_steps = 3000
 omega = 1
 wall_velocity = 0.1
-
 
 while len(sys.argv) >= s:
     match sys.argv[s-2]:
@@ -94,21 +93,6 @@ def y_in_process(y_coord):
     return lower <= y_coord <= upper
 
 
-def global_to_local_direction(coord1d, global_dir, lattice_dir, dir_size):
-    # +1 due to ghost cell
-    return int(global_dir - coord1d * (lattice_dir // dir_size)) + 1
-
-
-def global_coord_to_local_coord(global_x, global_y):
-    if x_in_process(global_x) and y_in_process(global_y):
-        local_x = global_to_local_direction(
-            rank_coords[0], global_x, x_n, sectsX)
-        local_y = global_to_local_direction(
-            rank_coords[1], global_y, y_n, sectsY)
-        return rank_coords, local_x, local_y
-    return None, None, None
-
-
 def Communicate(f, cartcomm, sd):
     sR, dR, sL, dL, sU, dU, sD, dD = sd
     rby = np.zeros((9, f.shape[-1]))
@@ -130,33 +114,93 @@ def Communicate(f, cartcomm, sd):
     cartcomm.Sendrecv(sb, dD, recvbuf=rby, source=sD)
     f[:, 0, :] = rby
 
+    return f
+
 
 def parallel_boundary_conditions():
 
     if y_in_process(y_n-1):
         # Moving top wall
+
         avg_rho = np.mean(rho)
         multiplier = 2 * avg_rho * w / c_s**2
         wall_velocity_local = [wall_velocity, 0.0]
 
-        f[4, :, -1] = f[2, :, -1] - \
+        f[4, :, -2] = f[2, :, -2] - \
             multiplier[2] * c[2] @ wall_velocity_local
-        f[7, :, -1] = f[5, :, -1] - \
+        f[7, :, -2] = f[5, :, -2] - \
             multiplier[5] * c[5] @ wall_velocity_local
-        f[8, :, -1] = f[6, :, -1] - \
+        f[8, :, -2] = f[6, :, -2] - \
             multiplier[6] * c[6] @ wall_velocity_local
 
     if y_in_process(0):
         # Rigid bottom wall
-        f[[2, 5, 6], :, 0] = f[[4, 7, 8], :, 0]
+        f[[2, 5, 6], :, 1] = f[[4, 7, 8], :, 1]
 
     if x_in_process(x_n-1):
         # Rigid right wall
-        f[[3, 7, 6], -1, :] = f[[1, 5, 8], -1, :]
+        f[[3, 7, 6], -2, :] = f[[1, 5, 8], -2, :]
 
     if x_in_process(0):
         # Rigid left wall
-        f[[1, 5, 8], 0, :] = f[[3, 7, 6], 0, :]
+        f[[1, 5, 8], 1, :] = f[[3, 7, 6], 1, :]
+
+
+def save_mpiio(comm, fn, g_kl):
+    """
+    Write a global two-dimensional array to a single file in the npy format
+    using MPI I/O: https://docs.scipy.org/doc/numpy/neps/npy-format.html
+
+    Arrays written with this function can be read with numpy.load.
+
+    Parameters
+    ----------
+    comm
+        MPI communicator.
+    fn : str
+        File name.
+    g_kl : array_like
+        Portion of the array on this MPI processes. This needs to be a
+        two-dimensional array.
+    """
+    from numpy.lib.format import dtype_to_descr, magic
+    magic_str = magic(1, 0)
+
+    local_nx, local_ny = g_kl.shape
+    nx = np.empty_like(local_nx)
+    ny = np.empty_like(local_ny)
+
+    commx = comm.Sub((True, False))
+    commy = comm.Sub((False, True))
+    commx.Allreduce(np.asarray(local_nx), nx)
+    commy.Allreduce(np.asarray(local_ny), ny)
+
+    arr_dict_str = str({'descr': dtype_to_descr(g_kl.dtype),
+                        'fortran_order': False,
+                        'shape': (np.asscalar(nx), np.asscalar(ny))})
+    while (len(arr_dict_str) + len(magic_str) + 2) % 16 != 15:
+        arr_dict_str += ' '
+    arr_dict_str += '\n'
+    header_len = len(arr_dict_str) + len(magic_str) + 2
+
+    offsetx = np.zeros_like(local_nx)
+    commx.Exscan(np.asarray(ny*local_nx), offsetx)
+    offsety = np.zeros_like(local_ny)
+    commy.Exscan(np.asarray(local_ny), offsety)
+
+    file = MPI.File.Open(comm, fn, MPI.MODE_CREATE | MPI.MODE_WRONLY)
+    if comm.Get_rank() == 0:
+        file.Write(magic_str)
+        file.Write(np.int16(len(arr_dict_str)))
+        file.Write(arr_dict_str.encode('latin-1'))
+    mpitype = MPI._typedict[g_kl.dtype.char]
+    filetype = mpitype.Create_vector(g_kl.shape[0], g_kl.shape[1], ny)
+    filetype.Commit()
+    file.Set_view(header_len + (offsety+offsetx)*mpitype.Get_size(),
+                  filetype=filetype)
+    file.Write_all(g_kl.copy())
+    filetype.Free()
+    file.Close()
 
 
 comm = MPI.COMM_WORLD
@@ -168,7 +212,6 @@ sectsX, sectsY = getSections()
 local_x_n = int(x_n // sectsX)
 local_y_n = int(y_n // sectsY)
 
-boundary = [False, False, False, False]
 cartcomm = comm.Create_cart(dims=[sectsX, sectsY], periods=[
                             True, True], reorder=False)
 rank_coords = cartcomm.Get_coords(rank)
@@ -187,7 +230,6 @@ comm.Gather(sd, allDestSourBuf, root=0)
 if rank == 0:
     cartarray = np.ones((sectsY, sectsX), dtype=int)
     allDestSour = np.array(allDestSourBuf).reshape((size, 8))
-
     for i in np.arange(size):
         cartarray[allrank_coords[i][0], allrank_coords[i][1]] = i
         sR, dR, sL, dL, sU, dU, sD, dD = allDestSour[i]
@@ -202,37 +244,11 @@ omega = 1 / (0.5 + 3 * v)
 
 os.makedirs('./sliding_lid_parallelized', exist_ok=True)
 
-f_full = np.zeros((9*x_n*y_n))
-comm.Gather(f[:, 1:-1, 1:-1].reshape(9*local_x_n*local_y_n), f_full, root=0)
-rank_coords_x = comm.gather(rank_coords[1], root=0)
-rank_coords_y = comm.gather(rank_coords[0], root=0)
-
-if rank == 0:
-    X0, Y0 = np.meshgrid(np.arange(x_n), np.arange(y_n))
-    xy = np.array([rank_coords_x, rank_coords_y]).T
-    f_plot = np.zeros((9, x_n, y_n))
-    f_full = f_full.reshape(9, x_n * y_n)
-
-    for i in np.arange(sectsX):
-        for j in np.arange(sectsY):
-            k = i*sectsX+j
-            xlo = local_x_n*xy[k, 1]
-            xhi = local_x_n*(xy[k, 1]+1)
-            ylo = local_y_n*xy[k, 0]
-            yhi = local_y_n*(xy[k, 0]+1)
-            flo = k*x_n*y_n//(sectsX*sectsY)
-            fhi = (k+1)*x_n*y_n//(sectsX*sectsY)
-            f_plot[:, xlo:xhi, ylo:yhi] = f_full[:,
-                                                 flo:fhi].reshape(9, local_x_n, local_y_n)
-
-    rho_plot, u_plot = collide(f_plot, omega)
-
-
 if rank == 0:
     start_time = time.time()
 
 for t in range(time_steps):
-    Communicate(f, cartcomm, sd)
+    f = Communicate(f, cartcomm, sd)
     stream(f)
     parallel_boundary_conditions()
     rho, u = collide(f, omega)
@@ -242,22 +258,21 @@ if rank == 0:
     print('{} iterations took {}s'.format(
         time_steps, end_time - start_time))
 
-plt.figure()
-plt.streamplot(np.arange(local_x_n), np.arange(local_y_n), u[0, 1:-1, 1:-1].T, u[1, 1:-1, 1:-1].T,
-               density=1, color='cornflowerblue')
-plt.savefig(
-    'sliding_lid_parallelized/sliding_lid_parallelized_'+str(rank)+'.png', bbox_inches='tight')
 
-f_full = np.zeros((9*x_n*y_n))
-comm.Gather(f[:, 1:-1, 1:-1].reshape(9*local_x_n*local_y_n), f_full, root=0)
+ux_full = np.zeros((x_n*y_n))
+uy_full = np.zeros((x_n*y_n))
+comm.Gather(u[0, 1:-1, 1:-1].reshape(local_x_n*local_y_n), ux_full, root=0)
+comm.Gather(u[1, 1:-1, 1:-1].reshape(local_x_n*local_y_n), uy_full, root=0)
 rank_coords_x = comm.gather(rank_coords[1], root=0)
 rank_coords_y = comm.gather(rank_coords[0], root=0)
 
 if rank == 0:
     X0, Y0 = np.meshgrid(np.arange(x_n), np.arange(y_n))
     xy = np.array([rank_coords_x, rank_coords_y]).T
-    f_plot = np.zeros((9, x_n, y_n))
-    f_full = f_full.reshape(9, x_n * y_n)
+    ux_plot = np.zeros((x_n, y_n))
+    ux_full = ux_full.reshape(x_n * y_n)
+    uy_plot = np.zeros((x_n, y_n))
+    uy_full = uy_full.reshape(x_n * y_n)
 
     for i in np.arange(sectsX):
         for j in np.arange(sectsY):
@@ -266,15 +281,26 @@ if rank == 0:
             xhi = local_x_n*(xy[k, 1]+1)
             ylo = local_y_n*xy[k, 0]
             yhi = local_y_n*(xy[k, 0]+1)
-            flo = k*x_n*y_n//(sectsX*sectsY)
-            fhi = (k+1)*x_n*y_n//(sectsX*sectsY)
-            f_plot[:, xlo:xhi, ylo:yhi] = f_full[:, flo:fhi].reshape(9,
-                                                                     local_x_n, local_y_n)
+            ulo = k*x_n*y_n//(sectsX*sectsY)
+            uhi = (k+1)*x_n*y_n//(sectsX*sectsY)
+            ux_plot[xlo:xhi, ylo:yhi] = ux_full[ulo:uhi].reshape(
+                local_x_n, local_y_n)
+            uy_plot[xlo:xhi, ylo:yhi] = uy_full[ulo:uhi].reshape(
+                local_x_n, local_y_n)
 
-    rho_plot, u_plot = collide(f_plot, omega)
+    # save_mpiio(cartcomm, 'sliding_lid_parallelized/ux.npy', ux_plot)
+    # save_mpiio(cartcomm, 'sliding_lid_parallelized/uy.npy', uy_plot)
+    # ux = np.load('sliding_lid_parallelized/ux.npy')
+    # uy = np.load('sliding_lid_parallelized/uy.npy')
+
+    # nx, ny = ux.shape
+
+    # plt.figure()
+    # plt.streamplot(X0, Y0, ux.T, uy.T, density=1, color='cornflowerblue')
+    # plt.show()
 
     plt.figure()
-    plt.streamplot(X0, Y0, u_plot[0].T, u_plot[1].T,
+    plt.streamplot(X0, Y0, ux_plot.T, uy_plot.T,
                    density=1, color='cornflowerblue')
     plt.savefig(
         'sliding_lid_parallelized/sliding_lid_parallelized.png', bbox_inches='tight')
