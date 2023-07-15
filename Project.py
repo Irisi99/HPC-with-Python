@@ -8,7 +8,6 @@ from mpi4py import MPI
 
 s = 4
 x_n = y_n = 50
-box = 300
 time_steps = 3000
 omega = 1
 eps = 0.01
@@ -21,8 +20,10 @@ flow_direction = 'right'
 
 while len(sys.argv) >= s:
     match sys.argv[s-2]:
-        case '-n':
-            x_n = y_n = int(sys.argv[s-1])
+        case '-xn':
+            x_n = int(sys.argv[s-1])
+        case '-yn':
+            y_n = int(sys.argv[s-1])
         case '-t':
             time_steps = int(sys.argv[s-1])
         case '-w':
@@ -132,11 +133,11 @@ def stokes_condition(omega):
 
 def rigidWall(wall_local):
     if wall_local == 'top':
-        f[[4, 7, 8], :, y_n-1] = f[[2, 5, 6], :, y_n-1]
+        f[[4, 7, 8], :, -1] = f[[2, 5, 6], :, -1]
     elif wall_local == 'bottom':
         f[[2, 5, 6], :, 0] = f[[4, 7, 8], :, 0]
     elif wall_local == 'right':
-        f[[3, 7, 6], x_n-1, :] = f[[1, 5, 8], x_n-1, :]
+        f[[3, 7, 6], -1, :] = f[[1, 5, 8], -1, :]
     else:
         f[[1, 5, 8], 0, :] = f[[3, 7, 6], 0, :]
 
@@ -147,11 +148,11 @@ def movingWall(wall_local):
 
     if wall_local == 'top':
         wall_velocity_local = [wall_velocity, 0.0]
-        f[4, :, y_n-1] = f[2, :, y_n-1] - \
+        f[4, :, -1] = f[2, :, -1] - \
             multiplier[2] * c[2] @ wall_velocity_local
-        f[7, :, y_n-1] = f[5, :, y_n-1] - \
+        f[7, :, -1] = f[5, :, -1] - \
             multiplier[5] * c[5] @ wall_velocity_local
-        f[8, :, y_n-1] = f[6, :, y_n-1] - \
+        f[8, :, -1] = f[6, :, -1] - \
             multiplier[6] * c[6] @ wall_velocity_local
     elif wall_local == 'bottom':
         wall_velocity_local = [wall_velocity, 0.0]
@@ -160,9 +161,9 @@ def movingWall(wall_local):
         f[6, :, 0] = f[8, :, 0] - multiplier[8] * c[8] @ wall_velocity_local
     elif wall_local == 'right':
         wall_velocity_local = [0.0, wall_velocity]
-        f[3, x_n-1] = f[1, x_n-1] - multiplier[1] * c[1] @ wall_velocity_local
-        f[7, x_n-1] = f[5, x_n-1] - multiplier[5] * c[5] @ wall_velocity_local
-        f[6, x_n-1] = f[8, x_n-1] - multiplier[8] * c[8] @ wall_velocity_local
+        f[3, -1] = f[1, -1] - multiplier[1] * c[1] @ wall_velocity_local
+        f[7, -1] = f[5, -1] - multiplier[5] * c[5] @ wall_velocity_local
+        f[6, -1] = f[8, -1] - multiplier[8] * c[8] @ wall_velocity_local
     else:
         wall_velocity_local = [0.0, wall_velocity]
         f[1, 0] = f[3, 0] - multiplier[3] * c[3] @ wall_velocity_local
@@ -175,25 +176,25 @@ def flow():
     rho_out = np.ones((x_n)) * outlet_rho * c_s**2
 
     if flow_direction == 'right':
-        f_in = equilibrium(rho_in, u[:, x_n-1, :])
+        f_in = equilibrium(rho_in, u[:, -1, :])
         f_out = equilibrium(rho_out, u[:, 0, :])
         f_eq = equilibrium(rho, u)
 
-        inlet = f_in + (f[:, x_n-1] - f_eq[:, x_n-1])
+        inlet = f_in + (f[:, -1] - f_eq[:, -1])
         outlet = f_out + (f[:, 0] - f_eq[:, 0])
 
         f[[1, 5, 8], 0] = inlet[[1, 5, 8]]
-        f[[3, 6, 7], x_n-1] = outlet[[3, 6, 7]]
+        f[[3, 6, 7], -1] = outlet[[3, 6, 7]]
 
     else:
         f_in = equilibrium(rho_in, u[:, 0, :])
-        f_out = equilibrium(rho_out, u[:, x_n-1, :])
+        f_out = equilibrium(rho_out, u[:, -1, :])
         f_eq = equilibrium(rho, u)
 
         inlet = f_in + (f[:, 0] - f_eq[:, 0])
-        outlet = f_out + (f[:, x_n-1] - f_eq[:, x_n-1])
+        outlet = f_out + (f[:, -1] - f_eq[:, -1])
 
-        f[[3, 6, 7], x_n-1] = inlet[[3, 6, 7]]
+        f[[3, 6, 7], -1] = inlet[[3, 6, 7]]
         f[[1, 5, 8], 0] = outlet[[1, 5, 8]]
 
 
@@ -201,6 +202,7 @@ if sys.argv[1] == "shear_wave_decay_density":
     u = np.zeros((2, x_n, y_n))
     rho = np.zeros((x_n, y_n))
     x = np.linspace(0, x_n, x_n)
+
     for i in np.arange(y_n):
         rho[:, i] = rho_0 + eps*np.sin(2*np.pi*x/x_n)
 
@@ -251,6 +253,7 @@ elif sys.argv[1] == "shear_wave_decay_velocity":
     rho = np.ones((x_n, y_n))
     u = np.zeros((2, x_n, y_n))
     y = np.linspace(0, y_n, y_n)
+
     for i in np.arange(x_n):
         u[0][i, :] = eps*np.sin(2*np.pi*y/y_n)
 
@@ -384,7 +387,6 @@ elif sys.argv[1] == "poiseuille_flow":
 
 
 elif sys.argv[1] == "sliding_lid":
-    x_n = y_n = box
     rho = np.ones((x_n, y_n))
     u = np.zeros((2, x_n, y_n))
     f = equilibrium(rho, u)
@@ -401,48 +403,24 @@ elif sys.argv[1] == "sliding_lid":
 
     os.makedirs('./sliding_lid', exist_ok=True)
 
-    for t in range(time_steps+1):
+    for t in range(time_steps):
         stream(f)
-        movingWall('right')
-        rigidWall('top')
+        movingWall('top')
+        rigidWall('right')
         rigidWall('left')
         rigidWall('bottom')
         rho, u = collide(f, omega)
 
-        if t % 500 == 0 and t != 0:
+        if t % 500 == 0:
             plt.clf()
             plt.ylim([-1, y_n])
             plt.xlim([-1, x_n])
             plt.ylabel('y position')
             plt.xlabel('x position')
-            plt.streamplot(x, y, u[1], u[0], density=1, color='cornflowerblue')
+            plt.streamplot(x, y, u[0].T, u[1].T,
+                           density=1, color='cornflowerblue')
             plt.savefig('sliding_lid/sliding_lid_t=' +
                         str(t)+'.png', bbox_inches='tight')
-
-
-elif sys.argv[1] == "sliding_lid_parallelized":
-    rho = np.ones((box, box))
-    u = np.zeros((2, box, box))
-    f = equilibrium(rho, u)
-    Re = 100
-
-    v = x_n * wall_velocity / Re
-    omega = 1 / (0.5 + 3 * v)
-    x = np.arange(x_n)
-    y = np.arange(y_n)
-
-    os.makedirs('./sliding_lid_parallelized', exist_ok=True)
-
-    # save_mpiio(comm, 'sliding_lid_parallelized/ux.npy', u[0])
-    # save_mpiio(comm, 'sliding_lid_parallelized/uy.npy', u[1])
-
-    # ux = np.load('sliding_lid_parallelized/ux.npy')
-    # uy = np.load('sliding_lid_parallelized/uy.npy')
-
-    # plt.figure()
-    # plt.streamplot(x, y, uy.T, ux.T, density=1, color='cornflowerblue')
-    # plt.savefig(
-    #     'sliding_lid_parallelized/sliding_lid_parallelized.png', bbox_inches='tight')
 
 else:
     print('Invalid Argument! Please use one of the proper arguments below:')
@@ -451,10 +429,10 @@ else:
     print('- couette_flow')
     print('- poiseuille_flow')
     print('- sliding_lid')
-    print('- sliding_lid_parallelized')
 
     print('Optional Arguments include:')
-    print('-n (int) : Grid Size')
+    print('-xn (int) : Grid Size on X dimension')
+    print('-yn (int) : Grid Size on Y dimension')
     print('-t (int) : Number of Iterations')
     print('-w (float) : Omega')
     print('-e (float) : Epsilon')
