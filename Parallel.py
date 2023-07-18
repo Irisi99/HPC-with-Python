@@ -7,7 +7,8 @@ from mpi4py import MPI
 
 s = 3
 x_n = y_n = 50
-time_steps = 3000
+time_steps = 300
+Re = 100
 omega = 1
 wall_velocity = 0.1
 
@@ -19,10 +20,13 @@ while len(sys.argv) >= s:
             y_n = int(sys.argv[s-1])
         case '-t':
             time_steps = int(sys.argv[s-1])
-        case '-w':
-            omega = float(sys.argv[s-1])
         case '-v':
             wall_velocity = float(sys.argv[s-1])
+        case '-r':
+            if int(sys.argv[s-1]) > 1000 or int(sys.argv[s-1]) <= 0:
+                print('Reynolds number needs to be bigger than 0 and smaller than 1000')
+                sys.exit()
+            Re = int(sys.argv[s-1])
     s += 2
 
 c_s = (1/np.sqrt(3))
@@ -238,11 +242,10 @@ rho = np.ones((local_x_n + 2, local_y_n + 2))
 u = np.zeros((2, local_x_n + 2, local_y_n + 2))
 f = equilibrium(rho, u)
 
-Re = 100
 v = (local_x_n+2) * wall_velocity / Re
 omega = 1 / (0.5 + 3 * v)
 
-os.makedirs('./sliding_lid_parallelized', exist_ok=True)
+os.makedirs('./sliding_lid_parallelized_Re='+str(Re), exist_ok=True)
 
 if rank == 0:
     start_time = time.time()
@@ -303,4 +306,4 @@ if rank == 0:
     plt.streamplot(X0, Y0, ux_plot.T, uy_plot.T,
                    density=1, color='cornflowerblue')
     plt.savefig(
-        'sliding_lid_parallelized/sliding_lid_parallelized.png', bbox_inches='tight')
+        'sliding_lid_parallelized_Re='+str(Re)+'/sliding_lid_parallelized_n='+str(size)+'_t='+str(time_steps)+'.png', bbox_inches='tight')

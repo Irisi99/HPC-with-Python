@@ -17,6 +17,7 @@ wall = 'top'
 inlet_rho = 1.005
 outlet_rho = 1
 flow_direction = 'right'
+Re = 100
 
 while len(sys.argv) >= s:
     match sys.argv[s-2]:
@@ -50,6 +51,12 @@ while len(sys.argv) >= s:
                 sys.exit()
             else:
                 flow_direction = sys.argv[s-1]
+        case '-r':
+            if int(sys.argv[s-1]) > 1000 or int(sys.argv[s-1]) <= 0:
+                print('Reynolds number needs to be bigger than 0 and smaller than 1000')
+                sys.exit()
+            Re = int(sys.argv[s-1])
+
     s += 2
 
 delta_rho = outlet_rho - inlet_rho
@@ -390,7 +397,6 @@ elif sys.argv[1] == "sliding_lid":
     rho = np.ones((x_n, y_n))
     u = np.zeros((2, x_n, y_n))
     f = equilibrium(rho, u)
-    Re = 100
 
     v = x_n * wall_velocity / Re
     omega = 1 / (0.5 + 3 * v)
@@ -398,12 +404,13 @@ elif sys.argv[1] == "sliding_lid":
     if omega > 1.7:
         print('omega greater than 1.7')
         exit()
+
     x = np.arange(x_n)
     y = np.arange(y_n)
 
-    os.makedirs('./sliding_lid', exist_ok=True)
+    os.makedirs('./sliding_lid_Re='+str(Re), exist_ok=True)
 
-    for t in range(time_steps):
+    for t in range(time_steps+1):
         stream(f)
         movingWall('top')
         rigidWall('right')
@@ -419,7 +426,7 @@ elif sys.argv[1] == "sliding_lid":
             plt.xlabel('x position')
             plt.streamplot(x, y, u[0].T, u[1].T,
                            density=1, color='cornflowerblue')
-            plt.savefig('sliding_lid/sliding_lid_t=' +
+            plt.savefig('sliding_lid_Re='+str(Re)+'/sliding_lid_t=' +
                         str(t)+'.png', bbox_inches='tight')
 
 else:
@@ -444,3 +451,4 @@ else:
     print('-o (float) : Outlet Density')
     print(
         '-f (string) {\'left\', \'right\'} : Decides which way the flow goes')
+    print(' -r (int) : Reynolds number')
