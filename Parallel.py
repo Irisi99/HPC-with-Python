@@ -6,28 +6,12 @@ import matplotlib.pyplot as plt
 from mpi4py import MPI
 
 s = 3
-x_n = y_n = 50
-time_steps = 300
-Re = 100
-omega = 1
+x_n = y_n = 300
+time_steps = 100
+Re = 1000
+v = 0.03
+omega = 1 / (0.5 + 3 * v)
 wall_velocity = 0.1
-
-while len(sys.argv) >= s:
-    match sys.argv[s-2]:
-        case '-xn':
-            x_n = int(sys.argv[s-1])
-        case '-yn':
-            y_n = int(sys.argv[s-1])
-        case '-t':
-            time_steps = int(sys.argv[s-1])
-        case '-v':
-            wall_velocity = float(sys.argv[s-1])
-        case '-r':
-            if int(sys.argv[s-1]) > 1000 or int(sys.argv[s-1]) <= 0:
-                print('Reynolds number needs to be bigger than 0 and smaller than 1000')
-                sys.exit()
-            Re = int(sys.argv[s-1])
-    s += 2
 
 c_s = (1/np.sqrt(3))
 
@@ -150,63 +134,6 @@ def parallel_boundary_conditions():
         f[[1, 5, 8], 1, :] = f[[3, 7, 6], 1, :]
 
 
-def save_mpiio(comm, fn, g_kl):
-    """
-    Write a global two-dimensional array to a single file in the npy format
-    using MPI I/O: https://docs.scipy.org/doc/numpy/neps/npy-format.html
-
-    Arrays written with this function can be read with numpy.load.
-
-    Parameters
-    ----------
-    comm
-        MPI communicator.
-    fn : str
-        File name.
-    g_kl : array_like
-        Portion of the array on this MPI processes. This needs to be a
-        two-dimensional array.
-    """
-    from numpy.lib.format import dtype_to_descr, magic
-    magic_str = magic(1, 0)
-
-    local_nx, local_ny = g_kl.shape
-    nx = np.empty_like(local_nx)
-    ny = np.empty_like(local_ny)
-
-    commx = comm.Sub((True, False))
-    commy = comm.Sub((False, True))
-    commx.Allreduce(np.asarray(local_nx), nx)
-    commy.Allreduce(np.asarray(local_ny), ny)
-
-    arr_dict_str = str({'descr': dtype_to_descr(g_kl.dtype),
-                        'fortran_order': False,
-                        'shape': (np.asscalar(nx), np.asscalar(ny))})
-    while (len(arr_dict_str) + len(magic_str) + 2) % 16 != 15:
-        arr_dict_str += ' '
-    arr_dict_str += '\n'
-    header_len = len(arr_dict_str) + len(magic_str) + 2
-
-    offsetx = np.zeros_like(local_nx)
-    commx.Exscan(np.asarray(ny*local_nx), offsetx)
-    offsety = np.zeros_like(local_ny)
-    commy.Exscan(np.asarray(local_ny), offsety)
-
-    file = MPI.File.Open(comm, fn, MPI.MODE_CREATE | MPI.MODE_WRONLY)
-    if comm.Get_rank() == 0:
-        file.Write(magic_str)
-        file.Write(np.int16(len(arr_dict_str)))
-        file.Write(arr_dict_str.encode('latin-1'))
-    mpitype = MPI._typedict[g_kl.dtype.char]
-    filetype = mpitype.Create_vector(g_kl.shape[0], g_kl.shape[1], ny)
-    filetype.Commit()
-    file.Set_view(header_len + (offsety+offsetx)*mpitype.Get_size(),
-                  filetype=filetype)
-    file.Write_all(g_kl.copy())
-    filetype.Free()
-    file.Close()
-
-
 comm = MPI.COMM_WORLD
 size = MPI.COMM_WORLD.Get_size()
 rank = MPI.COMM_WORLD.Get_rank()
@@ -241,9 +168,6 @@ if rank == 0:
 rho = np.ones((local_x_n + 2, local_y_n + 2))
 u = np.zeros((2, local_x_n + 2, local_y_n + 2))
 f = equilibrium(rho, u)
-
-v = (local_x_n+2) * wall_velocity / Re
-omega = 1 / (0.5 + 3 * v)
 
 os.makedirs('./sliding_lid_parallelized_Re='+str(Re), exist_ok=True)
 
@@ -290,17 +214,6 @@ if rank == 0:
                 local_x_n, local_y_n)
             uy_plot[xlo:xhi, ylo:yhi] = uy_full[ulo:uhi].reshape(
                 local_x_n, local_y_n)
-
-    # save_mpiio(cartcomm, 'sliding_lid_parallelized/ux.npy', ux_plot)
-    # save_mpiio(cartcomm, 'sliding_lid_parallelized/uy.npy', uy_plot)
-    # ux = np.load('sliding_lid_parallelized/ux.npy')
-    # uy = np.load('sliding_lid_parallelized/uy.npy')
-
-    # nx, ny = ux.shape
-
-    # plt.figure()
-    # plt.streamplot(X0, Y0, ux.T, uy.T, density=1, color='cornflowerblue')
-    # plt.show()
 
     plt.figure()
     plt.streamplot(X0, Y0, ux_plot.T, uy_plot.T,
