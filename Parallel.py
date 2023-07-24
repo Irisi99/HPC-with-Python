@@ -1,5 +1,5 @@
-import sys
 import time
+import sys
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,11 +7,21 @@ from mpi4py import MPI
 
 s = 3
 x_n = y_n = 300
-time_steps = 100
+time_steps = 100000
 Re = 1000
-v = 0.03
-omega = 1 / (0.5 + 3 * v)
 wall_velocity = 0.1
+
+while len(sys.argv) >= s:
+    match sys.argv[s-2]:
+        case '-n':
+            x_n = y_n = int(sys.argv[s-1])
+        case '-w':
+            wall_velocity = int(sys.argv[s-1])
+        case '-r':
+            Re = int(sys.argv[s-1])
+
+v = x_n * wall_velocity / Re
+omega = 1 / (0.5 + 3 * v)
 
 c_s = (1/np.sqrt(3))
 
@@ -48,15 +58,11 @@ def getSections():
         sectsY = int(np.floor(size/sectsX))
         print(
             'We have {} fields in x-direction and {} in y-direction'.format(sectsX, sectsY))
-        print('How do the fractions look like?')
-        print('x_n/y_n={} and sectsX/sectsY = {}\n'.format(x_n/y_n, sectsX/sectsY))
     elif x_n > y_n:
         sectsY = int(np.floor(np.sqrt(size*y_n/x_n)))
         sectsX = int(np.floor(size/sectsY))
         print(
             'We have {} fields in x-direction and {} in y-direction'.format(sectsX, sectsY))
-        print('How do the fractions look like?')
-        print('x_n/y_n={} and sectsX/sectsY = {}\n'.format(x_n/y_n, sectsX/sectsY))
     elif x_n == y_n:
         sectsY = int(np.floor(np.sqrt(size)))
         sectsX = int(size/sectsY)
@@ -103,6 +109,43 @@ def Communicate(f, cartcomm, sd):
     f[:, 0, :] = rby
 
     return f
+
+
+def plot(time):
+    ux_full = np.zeros((x_n*y_n))
+    uy_full = np.zeros((x_n*y_n))
+    comm.Gather(u[0, 1:-1, 1:-1].reshape(local_x_n*local_y_n), ux_full, root=0)
+    comm.Gather(u[1, 1:-1, 1:-1].reshape(local_x_n*local_y_n), uy_full, root=0)
+    rank_coords_x = comm.gather(rank_coords[1], root=0)
+    rank_coords_y = comm.gather(rank_coords[0], root=0)
+
+    if rank == 0:
+        X0, Y0 = np.meshgrid(np.arange(x_n), np.arange(y_n))
+        xy = np.array([rank_coords_x, rank_coords_y]).T
+        ux_plot = np.zeros((x_n, y_n))
+        ux_full = ux_full.reshape(x_n * y_n)
+        uy_plot = np.zeros((x_n, y_n))
+        uy_full = uy_full.reshape(x_n * y_n)
+
+        for i in np.arange(sectsX):
+            for j in np.arange(sectsY):
+                k = i*sectsX+j
+                xlo = local_x_n*xy[k, 1]
+                xhi = local_x_n*(xy[k, 1]+1)
+                ylo = local_y_n*xy[k, 0]
+                yhi = local_y_n*(xy[k, 0]+1)
+                ulo = k*x_n*y_n//(sectsX*sectsY)
+                uhi = (k+1)*x_n*y_n//(sectsX*sectsY)
+                ux_plot[xlo:xhi, ylo:yhi] = ux_full[ulo:uhi].reshape(
+                    local_x_n, local_y_n)
+                uy_plot[xlo:xhi, ylo:yhi] = uy_full[ulo:uhi].reshape(
+                    local_x_n, local_y_n)
+
+        plt.figure()
+        plt.streamplot(X0, Y0, ux_plot.T, uy_plot.T,
+                       density=1, color='cornflowerblue')
+        plt.savefig(
+            'sliding_lid_parallelized_Re='+str(Re)+'/sliding_lid_parallelized_grid='+str(x_n)+'_n='+str(size)+'_t='+str(time)+'.png', bbox_inches='tight')
 
 
 def parallel_boundary_conditions():
@@ -185,38 +228,4 @@ if rank == 0:
     print('{} iterations took {}s'.format(
         time_steps, end_time - start_time))
 
-
-ux_full = np.zeros((x_n*y_n))
-uy_full = np.zeros((x_n*y_n))
-comm.Gather(u[0, 1:-1, 1:-1].reshape(local_x_n*local_y_n), ux_full, root=0)
-comm.Gather(u[1, 1:-1, 1:-1].reshape(local_x_n*local_y_n), uy_full, root=0)
-rank_coords_x = comm.gather(rank_coords[1], root=0)
-rank_coords_y = comm.gather(rank_coords[0], root=0)
-
-if rank == 0:
-    X0, Y0 = np.meshgrid(np.arange(x_n), np.arange(y_n))
-    xy = np.array([rank_coords_x, rank_coords_y]).T
-    ux_plot = np.zeros((x_n, y_n))
-    ux_full = ux_full.reshape(x_n * y_n)
-    uy_plot = np.zeros((x_n, y_n))
-    uy_full = uy_full.reshape(x_n * y_n)
-
-    for i in np.arange(sectsX):
-        for j in np.arange(sectsY):
-            k = i*sectsX+j
-            xlo = local_x_n*xy[k, 1]
-            xhi = local_x_n*(xy[k, 1]+1)
-            ylo = local_y_n*xy[k, 0]
-            yhi = local_y_n*(xy[k, 0]+1)
-            ulo = k*x_n*y_n//(sectsX*sectsY)
-            uhi = (k+1)*x_n*y_n//(sectsX*sectsY)
-            ux_plot[xlo:xhi, ylo:yhi] = ux_full[ulo:uhi].reshape(
-                local_x_n, local_y_n)
-            uy_plot[xlo:xhi, ylo:yhi] = uy_full[ulo:uhi].reshape(
-                local_x_n, local_y_n)
-
-    plt.figure()
-    plt.streamplot(X0, Y0, ux_plot.T, uy_plot.T,
-                   density=1, color='cornflowerblue')
-    plt.savefig(
-        'sliding_lid_parallelized_Re='+str(Re)+'/sliding_lid_parallelized_n='+str(size)+'_t='+str(time_steps)+'.png', bbox_inches='tight')
+plot(time_steps)
