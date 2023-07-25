@@ -53,6 +53,8 @@ def collide(f, omega):
 
 
 def getSections():
+    # checks the X and Y size of the lattice grid and distributes the available processes
+    # based on their raport
     if x_n < y_n:
         sectsX = int(np.floor(np.sqrt(size*x_n/y_n)))
         sectsY = int(np.floor(size/sectsX))
@@ -74,39 +76,59 @@ def getSections():
 
 
 def x_in_process(x_coord):
+    # checks if global x coordinate is in the current process
+    # lower x bound of current process
     lower = rank_coords[0] * (x_n // sectsX)
     upper = (rank_coords[0] + 1) * (x_n // sectsX) - \
-        1 if not rank_coords[0] == sectsX - 1 else x_n - 1
-    return lower <= x_coord <= upper
+        1 if not rank_coords[0] == sectsX - 1 else x_n - \
+        1  # upper x bound of current process
+    return lower <= x_coord <= upper  # checks if x is inbetween upper and lower bounds
 
 
 def y_in_process(y_coord):
+    # checks if global y coordinate is in the current process
+    # lower y bound of current process
     lower = rank_coords[1] * (y_n // sectsY)
     upper = (rank_coords[1] + 1) * (y_n // sectsY) - \
-        1 if not rank_coords[1] == sectsY - 1 else y_n - 1
-    return lower <= y_coord <= upper
+        1 if not rank_coords[1] == sectsY - 1 else y_n - \
+        1  # upper y bound of current process
+    return lower <= y_coord <= upper  # checks if y is inbetween upper and lower bounds
 
 
 def Communicate(f, cartcomm, sd):
+    # explode the sender and recievers of the current process
     sR, dR, sL, dL, sU, dU, sD, dD = sd
-    rby = np.zeros((9, f.shape[-1]))
-    rbx = np.zeros((9, f.shape[-2]))
 
+    # initialize recieve buffer to hold the ghost lattice points
+    rb = np.zeros((9, f.shape[-1]))
+
+    # put lattice points on the sender buffer
     sb = f[:, :, 1].copy()
-    cartcomm.Sendrecv(sb, dL, recvbuf=rbx, source=sL)
-    f[:, :, -1] = rbx
+    # communicate with the process on that holds the grid points to the left
+    cartcomm.Sendrecv(sb, dL, recvbuf=rb, source=sL)
+    # assign recieved buffer to the ghost lattice points
+    f[:, :, -1] = rb
 
+    # put lattice points on the sender buffer
     sb = f[:, :, -2].copy()
-    cartcomm.Sendrecv(sb, dR, recvbuf=rbx, source=sR)
-    f[:, :, 0] = rbx
+    # communicate with the process on that holds the grid points to the right
+    cartcomm.Sendrecv(sb, dR, recvbuf=rb, source=sR)
+    # assign recieved buffer to the ghost lattice points
+    f[:, :, 0] = rb
 
+    # put lattice points on the sender buffer
     sb = f[:, 1, :].copy()
-    cartcomm.Sendrecv(sb, dU, recvbuf=rby, source=sU)
-    f[:, -1, :] = rby
+    # communicate with the process on that holds the grid points above
+    cartcomm.Sendrecv(sb, dU, recvbuf=rb, source=sU)
+    # assign recieved buffer to the ghost lattice points
+    f[:, -1, :] = rb
 
+    # put lattice points on the sender buffer
     sb = f[:, -2, :].copy()
-    cartcomm.Sendrecv(sb, dD, recvbuf=rby, source=sD)
-    f[:, 0, :] = rby
+    # communicate with the process on that holds the grid points below
+    cartcomm.Sendrecv(sb, dD, recvbuf=rb, source=sD)
+    # assign recieved buffer to the ghost lattice points
+    f[:, 0, :] = rb
 
     return f
 
@@ -114,8 +136,12 @@ def Communicate(f, cartcomm, sd):
 def plot(time):
     ux_full = np.zeros((x_n*y_n))
     uy_full = np.zeros((x_n*y_n))
+
+    # gather both X and Y velocities from all processes and put them on the predifined variables
     comm.Gather(u[0, 1:-1, 1:-1].reshape(local_x_n*local_y_n), ux_full, root=0)
     comm.Gather(u[1, 1:-1, 1:-1].reshape(local_x_n*local_y_n), uy_full, root=0)
+
+    # get the X and Y size of the process
     rank_coords_x = comm.gather(rank_coords[1], root=0)
     rank_coords_y = comm.gather(rank_coords[0], root=0)
 
@@ -127,6 +153,7 @@ def plot(time):
         uy_plot = np.zeros((x_n, y_n))
         uy_full = uy_full.reshape(x_n * y_n)
 
+        # go over each process and put their computed velocity into the correct part of the full velocity array
         for i in np.arange(sectsX):
             for j in np.arange(sectsY):
                 k = i*sectsX+j
@@ -149,10 +176,13 @@ def plot(time):
 
 
 def parallel_boundary_conditions():
+    
+    # we use -2 and 1 as indexes instead of 0 and -1 to take into account the ghost latice points
+    # we inserted on each process' grid
 
+    # if current process has latice points part of the top wall apply boundary condition
     if y_in_process(y_n-1):
-        # Moving top wall
-
+        # Moving top wall boundary conditions
         avg_rho = np.mean(rho)
         multiplier = 2 * avg_rho * w / c_s**2
         wall_velocity_local = [wall_velocity, 0.0]
@@ -164,30 +194,37 @@ def parallel_boundary_conditions():
         f[8, :, -2] = f[6, :, -2] - \
             multiplier[6] * c[6] @ wall_velocity_local
 
+    # if current process has latice points part of the bottom wall apply boundary condition
     if y_in_process(0):
-        # Rigid bottom wall
+        # Rigid bottom wall boundary conditions
         f[[2, 5, 6], :, 1] = f[[4, 7, 8], :, 1]
 
+    # if current process has latice points part of the right wall apply boundary condition
     if x_in_process(x_n-1):
-        # Rigid right wall
+        # Rigid right wall boundary conditions
         f[[3, 7, 6], -2, :] = f[[1, 5, 8], -2, :]
 
+    # if current process has latice points part of the left wall apply boundary condition
     if x_in_process(0):
-        # Rigid left wall
+        # Rigid left wall boundary conditions
         f[[1, 5, 8], 1, :] = f[[3, 7, 6], 1, :]
 
 
-comm = MPI.COMM_WORLD
-size = MPI.COMM_WORLD.Get_size()
-rank = MPI.COMM_WORLD.Get_rank()
+comm = MPI.COMM_WORLD  # initialize the MPI communicator
+size = MPI.COMM_WORLD.Get_size()  # get the number of available processors
+rank = MPI.COMM_WORLD.Get_rank()  # get the rank of the current process
 
-sectsX, sectsY = getSections()
+sectsX, sectsY = getSections() # get the portion of processes on the X and Y direction
 
+# detrmine the size of the local lattice of the process by dividing the lattice size
+# in the X and Y dimensions by the number of processes in that direction
 local_x_n = int(x_n // sectsX)
 local_y_n = int(y_n // sectsY)
 
+# initialize cartezian communicator
 cartcomm = comm.Create_cart(dims=[sectsX, sectsY], periods=[
                             True, True], reorder=False)
+# get the coordinates of the current process
 rank_coords = cartcomm.Get_coords(rank)
 
 # where to receive from and where send to
@@ -197,19 +234,23 @@ sU, dU = cartcomm.Shift(0, -1)
 sD, dD = cartcomm.Shift(0, 1)
 
 sd = np.array([sR, dR, sL, dL, sU, dU, sD, dD], dtype=int)
+# get the coordinates of all the processes
 allrank_coords = comm.gather(rank_coords, root=0)
+# create the buffer 
 allDestSourBuf = np.zeros(size*8, dtype=int)
 comm.Gather(sd, allDestSourBuf, root=0)
 
 if rank == 0:
+    # generate a matrix where every row specifies the rank of the reciever and sender process in each direction
     cartarray = np.ones((sectsY, sectsX), dtype=int)
     allDestSour = np.array(allDestSourBuf).reshape((size, 8))
     for i in np.arange(size):
         cartarray[allrank_coords[i][0], allrank_coords[i][1]] = i
         sR, dR, sL, dL, sU, dU, sD, dD = allDestSour[i]
 
-rho = np.ones((local_x_n + 2, local_y_n + 2))
-u = np.zeros((2, local_x_n + 2, local_y_n + 2))
+# add a buffer column/row on all the directions of the lattice
+rho = np.ones((local_x_n + 2, local_y_n + 2)) # initialize density to 1
+u = np.zeros((2, local_x_n + 2, local_y_n + 2)) # initialize velocity to 0
 f = equilibrium(rho, u)
 
 os.makedirs('./sliding_lid_parallelized_Re='+str(Re), exist_ok=True)
@@ -228,4 +269,5 @@ if rank == 0:
     print('{} iterations took {}s'.format(
         time_steps, end_time - start_time))
 
+# plot the velocity stream after all the time steps are finished
 plot(time_steps)
