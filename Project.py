@@ -5,6 +5,34 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 from scipy.signal import argrelextrema
 
+
+def helpText():
+    print('\n')
+    print('Invalid/No Argument! Please use one of the proper arguments below to run the simulations:')
+    print('- shear_wave_decay_density')
+    print('- shear_wave_decay_velocity')
+    print('- couette_flow')
+    print('- poiseuille_flow')
+    print('- sliding_lid')
+    print('- scaling_plot')
+    print('\n')
+    print('Optional Arguments include:')
+    print('-xn (int) : Grid Size on X dimension')
+    print('-yn (int) : Grid Size on Y dimension')
+    print('-t (int) : Number of Iterations')
+    print('-w (float) : Omega')
+    print('-e (float) : Epsilon')
+    print('-d (float) : Initial Density')
+    print('-v (float) : Sliding Wall Velocity')
+    print(
+        '-m (string) {\'top\',\'bottom\'} : Decides which of the walls moves')
+    print('-i (float) : Inlet Density')
+    print('-o (float) : Outlet Density')
+    print(
+        '-f (string) {\'left\', \'right\'} : Decides which way the flow goes')
+    print('-r (int) : Reynolds number')
+
+
 s = 4  # helper variable used to parse arguments given to the program by the user
 x_n = y_n = 50  # default grid size set to 50x50
 time_steps = 3000  # default time steps executed
@@ -285,6 +313,10 @@ def flow():
         # only the affected channels 1, 5 and 8 are assigned the computed probability density at outlet
         f[[1, 5, 8], 0] = outlet[[1, 5, 8]]
 
+
+if len(sys.argv) == 1:
+    helpText()
+    exit()
 
 if sys.argv[1] == "shear_wave_decay_density":
     u = np.zeros((2, x_n, y_n))  # initialize velocity to 0
@@ -647,26 +679,4 @@ elif sys.argv[1] == "scaling_plot":
     plt.savefig('scaling_plot', bbox_inches='tight')
 
 else:
-    print('Invalid Argument! Please use one of the proper arguments below:')
-    print('- shear_wave_decay_density')
-    print('- shear_wave_decay_velocity')
-    print('- couette_flow')
-    print('- poiseuille_flow')
-    print('- sliding_lid')
-    print('- scaling_plot')
-
-    print('Optional Arguments include:')
-    print('-xn (int) : Grid Size on X dimension')
-    print('-yn (int) : Grid Size on Y dimension')
-    print('-t (int) : Number of Iterations')
-    print('-w (float) : Omega')
-    print('-e (float) : Epsilon')
-    print('-d (float) : Initial Density')
-    print('-v (float) : Sliding Wall Velocity')
-    print(
-        '-m (string) {\'top\',\'bottom\'} : Decides which of the walls moves')
-    print('-i (float) : Inlet Density')
-    print('-o (float) : Outlet Density')
-    print(
-        '-f (string) {\'left\', \'right\'} : Decides which way the flow goes')
-    print(' -r (int) : Reynolds number')
+    helpText()
