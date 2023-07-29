@@ -8,7 +8,7 @@ from scipy.signal import argrelextrema
 s = 4  # helper variable used to parse arguments given to the program by the user
 x_n = y_n = 50  # default grid size set to 50x50
 time_steps = 3000  # default time steps executed
-omega = 1  # default relaxation parameter
+omega = 1  # default relaxation factor
 eps = 0.01  # initial epsilon of shear wave decay
 rho_0 = 1  # inital density for shear wave density decay
 # default wall velocity for couette, poiseuille and sliding lid simulations
@@ -61,7 +61,7 @@ while len(sys.argv) >= s:
 
     s += 2
 
-delta_rho = 1/2 * (outlet_rho - inlet_rho)  # the flow in posieuille simulation
+delta_rho = (outlet_rho - inlet_rho)  # the flow in posieuille simulation
 c_s = 1/np.sqrt(3)   # latice units
 
 # 9 directions of the velocity in the grid
@@ -89,16 +89,16 @@ def stream(f):
 
 
 def equilibrium(rho, u):
-    # equilibrium function generates the distribution array from the density and velocity
-    # this is done via the equilibrium distribution equation
+    # equilibrium function generates the probability density from the density and velocity
+    # this is done via the equilibrium probability density equation
     cu = np.dot(u.T, c.T).T
     uu = np.sum(u**2, axis=0)
     return (w*(rho*(1 + 3*cu + 9/2*cu**2 - 3/2*uu)).T).T
 
 
 def collide(f, omega):
-    # collide function generates density and velocity from the distribution array
-    # this is done by implying that the distribution array locally relaxes to an equilibrium distribution
+    # collide function generates density and velocity from the probability density
+    # this is done by implying that the probability density locally relaxes to an equilibrium probability density
     rho = np.einsum('xyz->yz', f)
     u = np.einsum('xyz,xi->iyz', f, c) / rho
     f += omega*(equilibrium(rho, u) - f)
@@ -123,11 +123,11 @@ def stokes_condition(omega):
         for i in np.arange(x_n):
             u[0][i, :] = eps*np.sin(2*np.pi*y/y_n)
 
-    f = equilibrium(rho, u)  # generate the equilibrium distribution
+    f = equilibrium(rho, u)  # generate the equilibrium probability density
 
     # main for loop that runs based on the passed time steps
     for t in range(time_steps):
-        # apply a stream operation to the distribution
+        # apply a stream operation to the probability density
         stream(f)
         # generate the new density and velocity via the collide function
         rho, u = collide(f, omega)
@@ -173,7 +173,7 @@ def stokes_condition(omega):
 def rigidWall(wall_local):
     # the rigidWall function applies the bounce back boundary condition
     # depending on the argument we pass when calling this function that specifies where we want to apply this
-    # we transform different segments of the distribution array
+    # we transform different segments of the probability density
     if wall_local == 'top':
         # roll back for channels 2, 5 and 6 to bounce to channels 4, 7 and 8 respectivaly
         f[[4, 7, 8], :, -1] = f[[2, 5, 6], :, -1]
@@ -197,7 +197,7 @@ def movingWall(wall_local):
 
     # based on the wall we decide to shift the wall velocity array will have as a wall velocity
     # either the first or second element and the other element will be 0
-    # we apply the boundary condition on different parts of the distribution array based on the argument we pass the function
+    # we apply the boundary condition on different parts of the probability density based on the argument we pass the function
     if wall_local == 'top':
         wall_velocity_local = [wall_velocity, 0.0]
         # roll back for channel 2 to bounce (with momentum) to channel 4
@@ -238,41 +238,51 @@ def flow():
     rho_in = np.ones((x_n)) * inlet_rho * c_s**2
     rho_out = np.ones((x_n)) * outlet_rho * c_s**2
 
-    # based on the direction of flow we pass as argument we shift different parts of the distribution array
-    # it calculates the equilibrium distribution as well as that of the inlet and outlet density
+    f_in = equilibrium(rho_in, u[:, -2, :])
+    f_out = equilibrium(rho_out, u[:, 1, :])
+    f_eq = equilibrium(rho, u)
+
+    # based on the direction of flow we pass as argument we shift different parts of the probability density
+    # it calculates the equilibrium probability density as well as that of the inlet and outlet density
     # with the velocity at inlet/outlet position
     if flow_direction == 'right':
-        f_in = equilibrium(rho_in, u[:, -1, :])
-        f_out = equilibrium(rho_out, u[:, 0, :])
+
+        # since we consider the first (0) and last (-1) positions as 'outside' of the grid when updating we need to access
+        # the second and second to last x positions
+        f_in = equilibrium(rho_in, u[:, -2, :])
+        f_out = equilibrium(rho_out, u[:, 1, :])
         f_eq = equilibrium(rho, u)
 
-        # the distribution at the inlet postion is calculated as the inlet flow distribution with the difference
-        # between the normal and equilibrium distributions at outlet postition
+        # the probability density at the inlet postion is calculated as the inlet flow probability density with the difference
+        # between the normal and equilibrium probability density at outlet postition
         inlet = f_in + (f[:, -1] - f_eq[:, -1])
-        # the distribution at the outlet position is calculated as the outlet flow distribution with the difference
-        # between the normal and equilibrium distributions at inlet postition
+        # the probability density at the outlet position is calculated as the outlet flow probability density with the difference
+        # between the normal and equilibrium probability density at inlet postition
         outlet = f_out + (f[:, 0] - f_eq[:, 0])
 
-        # only the affected channels 1, 5 and 8 are assigned the computed distribution at inlet
+        # only the affected channels 1, 5 and 8 are assigned the computed probability density at inlet
         f[[1, 5, 8], 0] = inlet[[1, 5, 8]]
-        # only the affected channels 3, 6 and 7 are assigned the computed distribution at outlet
+        # only the affected channels 3, 6 and 7 are assigned the computed probability density at outlet
         f[[3, 6, 7], -1] = outlet[[3, 6, 7]]
 
     else:
-        f_in = equilibrium(rho_in, u[:, 0, :])
-        f_out = equilibrium(rho_out, u[:, -1, :])
+
+        # since we consider the first (0) and last (-1) positions as 'outside' of the grid when updating we need to access
+        # the second and second to last x positions
+        f_in = equilibrium(rho_in, u[:, 1, :])
+        f_out = equilibrium(rho_out, u[:, -2, :])
         f_eq = equilibrium(rho, u)
 
-        # the distribution at the inlet postion is calculated as the inlet flow distribution with the difference
-        # between the normal and equilibrium distributions at outlet postition
+        # the probability density at the inlet postion is calculated as the inlet flow probability density with the difference
+        # between the normal and equilibrium probability density at outlet postition
         inlet = f_in + (f[:, 0] - f_eq[:, 0])
-        # the distribution at the outlet position is calculated as the outlet flow distribution with the difference
-        # between the normal and equilibrium distributions at inlet postition
+        # the probability density at the outlet position is calculated as the outlet flow probability density with the difference
+        # between the normal and equilibrium probability density at inlet postition
         outlet = f_out + (f[:, -1] - f_eq[:, -1])
 
-        # only the affected channels 3, 6and 7 are assigned the computed distribution at inlet
+        # only the affected channels 3, 6and 7 are assigned the computed probability density at inlet
         f[[3, 6, 7], -1] = inlet[[3, 6, 7]]
-        # only the affected channels 1, 5 and 8 are assigned the computed distribution at outlet
+        # only the affected channels 1, 5 and 8 are assigned the computed probability density at outlet
         f[[1, 5, 8], 0] = outlet[[1, 5, 8]]
 
 
@@ -286,34 +296,41 @@ if sys.argv[1] == "shear_wave_decay_density":
     for i in np.arange(y_n):
         rho[:, i] = rho_0 + eps*np.sin(2*np.pi*x/x_n)
 
-    # generate the equilibrium distribution
+    # generate the equilibrium probability density
     f = equilibrium(rho, u)
 
     avg_rho = []
+    analytical_rho = []
+    analytical_rho2 = []
+    v = 1/3 * (1/omega - 0.5)
     # create directory to save the simulations that will be generated
     os.makedirs('./shear_wave_decay_density', exist_ok=True)
 
     # main for loop that runs based on the passed time steps
     for t in range(time_steps):
-        # apply a stream operation to the distribution
+        # apply a stream operation to the probability density
         stream(f)
         # generate the new density and velocity via the collide function
         rho, u = collide(f, omega)
         # add the current average density into the average density array for later computations
         avg_rho.append(rho[int(x_n/4), int(y_n/2)])
+        # add the analytical density in two arrays so it does not fill in the plot
+        analytical_rho.append(
+            rho_0 + eps*np.exp(-v*(2*np.pi/x_n)**2 * t)*np.sin(2*np.pi*int(x_n/4)/x_n))
+        analytical_rho2.append(
+            rho_0 + eps*np.exp(-v*(2*np.pi/x_n)**2 * t)*np.sin(2*np.pi*int(3*x_n/4)/x_n))
 
-        # once evry 150 steps plot the current density distribution at the center of the grid
+        # once evry 150 steps plot the current density probability density at the center of the grid
         if t % 150 == 0 and t <= 1500:
             plt.clf()
             plt.ylim([rho_0 - eps, rho_0 + eps])
             plt.ylabel('density rho at y = '+str(int(y_n/2)))
             plt.xlabel('x position')
-            plt.title('t = '+str(t))
             plt.plot(rho[:, int(y_n/2)])
             plt.savefig('shear_wave_decay_density/t=' +
                         str(t)+'.png', bbox_inches='tight')
 
-    # once the specified time steps have finished we plot the average density distribution in order
+    # once the specified time steps have finished we plot the average density probability density in order
     # to see how it evolved in time
     plt.clf()
     plt.ylim([rho_0 - eps, rho_0 + eps])
@@ -321,6 +338,16 @@ if sys.argv[1] == "shear_wave_decay_density":
     plt.xlabel('timestep t')
     plt.plot(avg_rho)
     plt.savefig('shear_wave_decay_density/evolution_over_time.png',
+                bbox_inches='tight')
+
+    # plot the analytical density decay
+    plt.clf()
+    plt.ylim([rho_0 - eps, rho_0 + eps])
+    plt.ylabel('density rho at x = '+str(int(x_n/2))+' y = '+str(int(y_n/2)))
+    plt.xlabel('timestep t')
+    plt.plot(analytical_rho, color='orange')
+    plt.plot(analytical_rho2, color='orange')
+    plt.savefig('shear_wave_decay_density/analytical_evolution_over_time.png',
                 bbox_inches='tight')
 
     # apply the stokes condition for the specified range of omegas
@@ -332,7 +359,7 @@ if sys.argv[1] == "shear_wave_decay_density":
     plt.clf()
     plt.yscale('log')
     plt.ylabel('viscosity v')
-    plt.xlabel('relaxation term w')
+    plt.xlabel('relaxation factor w')
     plt.plot(W, analytical_viscosity, color='orange',
              label='analytic viscosity')
     plt.plot(W, simulated_viscosity, color='cornflowerblue',
@@ -352,34 +379,38 @@ elif sys.argv[1] == "shear_wave_decay_velocity":
     for i in np.arange(x_n):
         u[0][i, :] = eps*np.sin(2*np.pi*y/y_n)
 
-    # generate the equilibrium distribution
+    # generate the equilibrium probability density
     f = equilibrium(rho, u)
 
     avg_u = []
+    analytical_u = []
+    v = 1/3 * (1/omega - 0.5)
     # create directory to save the simulations that will be generated
     os.makedirs('./shear_wave_decay_velocity', exist_ok=True)
 
     # main for loop that runs based on the passed time steps
     for t in range(time_steps):
-        # apply a stream operation to the distribution
+        # apply a stream operation to the probability density
         stream(f)
         # generate the new density and velocity via the collide function
         rho, u = collide(f, omega)
         # add the current average velocity into the average velocity array for later computations
         avg_u.append(u[0, int(x_n/2), int(y_n/4)])
+        # calculate the analytical velocity decay
+        analytical_u.append(eps*np.exp(-v*(2*np.pi/y_n)**2 * t)
+                            * np.sin(2*np.pi*int(y_n/4)/y_n))
 
-        # once evry 150 steps plot the current density distribution at the center of the grid
+        # once evry 150 steps plot the current density probability density at the center of the grid
         if t % 150 == 0 and t <= 1500:
             plt.clf()
             plt.ylim([-eps, +eps])
             plt.ylabel('velocity u at x = '+str(int(x_n/2)))
             plt.xlabel('y position')
-            plt.title('t = '+str(t))
             plt.plot(u[0, int(x_n/2)])
             plt.savefig('shear_wave_decay_velocity/t=' +
                         str(t)+'.png', bbox_inches='tight')
 
-    # once the specified time steps have finished we plot the average veolcity distribution in order
+    # once the specified time steps have finished we plot the average veolcity probability density in order
     # to see how it evolved in time
     plt.clf()
     plt.ylim([0, eps])
@@ -387,6 +418,15 @@ elif sys.argv[1] == "shear_wave_decay_velocity":
     plt.xlabel('timestep t')
     plt.plot(avg_u)
     plt.savefig('shear_wave_decay_velocity/evolution_over_time.png',
+                bbox_inches='tight')
+
+    # plot the analytical velocity decay
+    plt.clf()
+    plt.ylim([0, eps])
+    plt.ylabel('velocity u at x = '+str(int(x_n/2))+' y = '+str(int(y_n/4)))
+    plt.xlabel('timestep t')
+    plt.plot(analytical_u, color='orange')
+    plt.savefig('shear_wave_decay_velocity/analytical_evolution_over_time.png',
                 bbox_inches='tight')
 
     # apply the stokes condition for the specified range of omegas
@@ -404,13 +444,14 @@ elif sys.argv[1] == "shear_wave_decay_velocity":
     plt.plot(W, simulated_viscosity, color='cornflowerblue',
              label="simulated viscosity")
     plt.legend()
-    plt.savefig('shear_wave_decay_velocity/w_relaxation.png')
+    plt.savefig('shear_wave_decay_velocity/w_relaxation.png',
+                bbox_inches='tight')
 
 
 elif sys.argv[1] == "couette_flow":
     rho = np.ones((x_n, y_n))  # initialize density to 1
     u = np.zeros((2, x_n, y_n))  # initialize velocity to 0
-    f = equilibrium(rho, u)  # generate the equilibrium distribution
+    f = equilibrium(rho, u)  # generate the equilibrium probability density
 
     y = np.arange(y_n)  # evenly spaced values from 0 to Y
 
@@ -435,7 +476,7 @@ elif sys.argv[1] == "couette_flow":
 
     # main for loop that runs based on the passed time steps
     for t in range(time_steps):
-        # apply a stream operation to the distribution
+        # apply a stream operation to the probability density
         stream(f)
         # apply moving wall boundary conditions to upper/lower wall
         movingWall(wall)
@@ -470,7 +511,7 @@ elif sys.argv[1] == "couette_flow":
 elif sys.argv[1] == "poiseuille_flow":
     rho = np.ones((x_n, y_n))  # initialize density to 1
     u = np.zeros((2, x_n, y_n))  # initialize velocity to 0
-    f = equilibrium(rho, u)  # generate the equilibrium distribution
+    f = equilibrium(rho, u)  # generate the equilibrium probability density
 
     # create directory to save the simulations that will be generated
     os.makedirs('./poiseuille_flow', exist_ok=True)
@@ -497,7 +538,7 @@ elif sys.argv[1] == "poiseuille_flow":
     for t in range(time_steps):
         # apply the flow function
         flow()
-        # apply the streaming function to the distribution array
+        # apply the streaming function to the probability density
         stream(f)
         # apply the rigid wall boundary conditions to the upper wall
         rigidWall('top')
@@ -529,13 +570,13 @@ elif sys.argv[1] == "poiseuille_flow":
 elif sys.argv[1] == "sliding_lid":
     rho = np.ones((x_n, y_n))  # initialize density to 1
     u = np.zeros((2, x_n, y_n))  # initialize velocity to 0
-    f = equilibrium(rho, u)  # generate the equilibrium distribution
+    f = equilibrium(rho, u)  # generate the equilibrium probability density
 
     # in the sliding lid experiment viscosity is calculated based on the wall velocity and the Reynolds
     # with the formula given in milestone 6
     v = x_n * wall_velocity / Re
 
-    # we flip the viscosity formula to now generate the relaxation parameter
+    # we flip the viscosity formula to now generate the relaxation factor
     omega = 1 / (0.5 + 3 * v)
 
     # we check that omega does not go above 1.7 since it leads to inacurrecy in calculations
@@ -551,7 +592,7 @@ elif sys.argv[1] == "sliding_lid":
 
     # main for loop that runs based on the passed time steps
     for t in range(time_steps+1):
-        # apply a stream operation to the distribution
+        # apply a stream operation to the probability density
         stream(f)
         # apply moving wall boundary conditions to upper wall
         movingWall('top')
@@ -578,20 +619,30 @@ elif sys.argv[1] == "sliding_lid":
 
 
 elif sys.argv[1] == "scaling_plot":
-    x = [4, 9, 16, 25, 36, 100, 144]  # number of processors
+    x = [1, 4, 9, 16, 25, 36, 100, 144]  # number of processors
 
-    # MLUPS for each nnumber of processes
-    # MLUPS = the number of grid points * number of time steps / runtime
-    # time steps = 100000
-    line1 = [85, 66, 56, 62, 57, 50, 47]
-    line2 = [633, 322, 208, 168, 139, 87, 75]
-    line3 = [9999, 1045, 598, 459, 355, 141, 112]
+    # MLUPS for each number of processes
+    # MLUPS = grid points * number of time steps / runtime
+    # time steps = 10000
+    line1 = [3557874, 14267596, 21572387,
+             26081040, 27470588, 29625954, 38860103, 41436464]
+    line2 = [2865603, 14206787, 28337531,
+             41897998, 52847915, 64377682, 102272727, 116279069]
+    line3 = [2477837, 11644455, 22961932, 37367656,
+             49917520, 65678404, 191489361, 249480249]
+    line4 = [2081451, 10155593, 19042500,
+             30484432, 40714713, 56241511, 178414096, 287234042]
 
     # plot the scale test in log scale
     plt.yscale('log')
-    plt.plot(x, line1, label='100x100')
+    plt.xscale('log')
+    plt.ylabel('MLUPS')
+    plt.xlabel('# of processors')
+    plt.plot(x, line1, label='150x150')
     plt.plot(x, line2, label='300x300')
-    plt.plot(x, line3, label='500x500')
+    plt.plot(x, line3, label='600x600')
+    plt.plot(x, line4, label='900x900')
+    plt.grid(True, which="both")
     plt.legend(loc='best')
     plt.savefig('scaling_plot', bbox_inches='tight')
 
